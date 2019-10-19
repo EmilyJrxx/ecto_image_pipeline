@@ -3,7 +3,7 @@ Module defining several inputs for the object recognition pipeline
 """
 from .camera_base import CameraType
 from ecto import BlackBoxCellInfo as CellInfo, BlackBoxForward as Forward
-from ecto_image_pipeline.base import RescaledRegisteredDepth
+from ecto_image_pipeline.base import RescaledRegisteredDepth, CameraFromOpenNI
 try:
     from ecto_image_pipeline.conversion import MatToPointCloudXYZOrganized
     HAS_PCL = True
@@ -40,12 +40,16 @@ class BaseSource(ecto.BlackBox):
 
     @staticmethod
     def declare_cells(_p):
+
         res = {'camera_info_image': CellInfo(ecto_ros.CameraInfo2Cv),
                 'camera_info_depth': CellInfo(ecto_ros.CameraInfo2Cv),
                 'crop_box': CellInfo(CropBox),
                 'depth_map': CellInfo(RescaledRegisteredDepth)}
         if HAS_PCL:
             res['cloud'] = CellInfo(MatToPointCloudXYZOrganized)
+        if 'camera' in p['outputs_list']:
+            res['converter'] = CellInfo(CameraFromOpenNI)
+
         return res
 
     @staticmethod
@@ -65,6 +69,8 @@ class BaseSource(ecto.BlackBox):
             }
         if HAS_PCL:
             o['cloud'] = [Forward('point_cloud')]
+        if 'converter' in cell_names:
+            o['converter'] = [Forward('camera')]
         return (p,i,o)
 
     def configure(self, _p, _i, _o):
@@ -78,6 +84,10 @@ class BaseSource(ecto.BlackBox):
 
     def connections(self, p):
         #ros message converters
+        cell_names = self.delcare_cells(p).keys()
+
+        keys = ('depth', 'image', 'focal_length_image', 'focal_length_depth', 'baseline')
+        
         graph = [self.source["image"] >> self._rgb_image["image"],
                   self.source["depth"] >> self._depth_converter["image"],
                   self.source["depth_info"] >> self.camera_info_depth['camera_info'],
@@ -102,7 +112,8 @@ class BaseSource(ecto.BlackBox):
                  ]
         if HAS_PCL:
             graph += [ self.crop_box['points3d'] >> self.cloud['points'] ]
-
+        if 'converter' in cell_names:
+            graph += [ self.source[keys] >> self.converter[keys] ]
         return graph
 
 class OpenNISubscriber(BaseSource):
@@ -114,6 +125,7 @@ class OpenNISubscriber(BaseSource):
         #NOTE that these are all ROS remappable on the command line in typical ros fashion
         qsize = 1
         cells = BaseSource.declare_cells(p)
+
         subs = dict(image=ImageSub(topic_name='/bogus_topic_image', queue_size=qsize),
                     image_info=CameraInfoSub(topic_name='/bogus_topic_image', queue_size=qsize),
                     depth=ImageSub(topic_name='/bogus_topic_depth', queue_size=qsize),
@@ -125,7 +137,9 @@ class OpenNISubscriber(BaseSource):
         return cells
 
     @staticmethod
-    def declare_forwards(p_in):
+    def declare_forwards(cls, p_in):
+        cell_names = cls.declare_cells(p).keys()
+
         p, i, o = BaseSource.declare_forwards(p_in)
 
         #notice that this is not a forward declare
@@ -135,6 +149,7 @@ class OpenNISubscriber(BaseSource):
                       Forward('depth_info', 'depth_info_message')]
 
         return (p,i,o)
+
 
 ########################################################################################################################
 
